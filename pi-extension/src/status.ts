@@ -1,21 +1,19 @@
 import { basename } from 'node:path';
 import stringWidth from 'string-width';
-import type { ApprovalMode, EditorContext } from './types.js';
+import type { EditorContext } from './types.js';
 
 export type StatusRenderMode = 'widget' | 'status';
 
-let statusHideTimer: ReturnType<typeof setTimeout> | undefined;
-let statusHideGeneration = 0;
 let connectionHideTimer: ReturnType<typeof setTimeout> | undefined;
 let connectionHideGeneration = 0;
 
-// Enable transient auto-hide for connection and approval statuses.
+// Enable transient auto-hide for connection status messages.
 const ENABLE_TRANSIENT_STATUS_HIDE = true;
 
 const STATUSBAR_WIDGET_ID = 'pi-ide-bridge-statusbar';
 const STATUSBAR_SAFE_RIGHT_MARGIN = 6;
 
-type SlotKey = 'context' | 'connection' | 'approval';
+type SlotKey = 'context' | 'connection';
 type Side = 'left' | 'right';
 
 type SlotItem = {
@@ -26,10 +24,9 @@ type SlotItem = {
 const statusBarState: Record<SlotKey, string | undefined> = {
   context: undefined,
   connection: undefined,
-  approval: undefined,
 };
 
-const leftSlotOrder: SlotKey[] = ['approval'];
+const leftSlotOrder: SlotKey[] = [];
 const rightSlotOrder: SlotKey[] = ['connection', 'context'];
 
 let resizeListenerAttached = false;
@@ -39,16 +36,7 @@ let statusRenderMode: StatusRenderMode = 'widget';
 const STATUS_KEYS: Record<SlotKey, string> = {
   context: 'pi-ide-bridge-context',
   connection: 'pi-ide-bridge-connection',
-  approval: 'pi-ide-bridge-approval',
 };
-
-export function clearApprovalStatusTimer() {
-  if (statusHideTimer) {
-    clearTimeout(statusHideTimer);
-    statusHideTimer = undefined;
-  }
-  statusHideGeneration++;
-}
 
 export function clearConnectionStatusTimer() {
   if (connectionHideTimer) {
@@ -71,7 +59,6 @@ export function disposeStatusBar(ctx?: any) {
 
   statusBarState.context = undefined;
   statusBarState.connection = undefined;
-  statusBarState.approval = undefined;
 }
 
 export function getStatusRenderMode(): StatusRenderMode {
@@ -104,21 +91,6 @@ export function applyConnectionStatus(ctx: any, connected: boolean, durationMs: 
   connectionHideTimer = setTimeout(() => {
     if (generation !== connectionHideGeneration) return;
     setStatusBarSlot(ctx, 'connection', undefined);
-  }, durationMs);
-}
-
-export function applyApprovalStatus(ctx: any, mode: ApprovalMode, durationMs: number) {
-  const base = `⏵⏵ auto-accept edits: ${mode === 'auto' ? 'on' : 'off'} (F8 to cycle)`;
-  const text = formatApprovalText(ctx, base, mode);
-  setStatusBarSlot(ctx, 'approval', text);
-
-  if (!ENABLE_TRANSIENT_STATUS_HIDE) return;
-
-  if (statusHideTimer) clearTimeout(statusHideTimer);
-  const generation = ++statusHideGeneration;
-  statusHideTimer = setTimeout(() => {
-    if (generation !== statusHideGeneration) return;
-    setStatusBarSlot(ctx, 'approval', undefined);
   }, durationMs);
 }
 
@@ -275,12 +247,6 @@ function formatAccentText(ctx: any, text: string): string {
   return `\u001b[38;2;74;61;196m${text}\u001b[0m`;
 }
 
-function formatErrorText(ctx: any, text: string): string {
-  const theme = ctx.ui?.theme;
-  if (theme?.fg) return theme.fg('error', text);
-  return text;
-}
-
 function formatConnectionText(ctx: any, icon: string, body: string, connected: boolean): string {
   const theme = ctx.ui?.theme;
   const iconText = theme?.fg
@@ -288,10 +254,6 @@ function formatConnectionText(ctx: any, icon: string, body: string, connected: b
     : icon;
   const bodyText = formatAccentText(ctx, body);
   return `${iconText} ${bodyText}`;
-}
-
-function formatApprovalText(ctx: any, text: string, mode: ApprovalMode): string {
-  return mode === 'auto' ? formatAccentText(ctx, text) : formatErrorText(ctx, text);
 }
 
 function textWidth(text: string): number {

@@ -1,7 +1,7 @@
 {
   "name": "pi-ide-bridge-vscode",
   "displayName": "Pi IDE Bridge",
-  "description": "VS Code companion for the Pi coding agent — bridges editor context, diff review, and diagnostics.",
+  "description": "VS Code companion for the Pi coding agent — bridges editor context and diagnostics on demand.",
   "version": "0.2.4",
   "publisher": "m4riok",
   "license": "MIT",

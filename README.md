@@ -1,13 +1,13 @@
 # Pi IDE Bridge
 
-Pi IDE Bridge connects the Pi coding agent to VS Code. Pi pauses before touching your files, opens a native diff, and waits for you to approve or reject. It also feeds your current editor state into Pi automatically so the agent always knows what you are looking at.
+Pi IDE Bridge connects the Pi coding agent to VS Code on demand. Run `/ide` when you want Pi to receive the current editor state and access VS Code diagnostics; run `/ide disconnect` when you want to end the connection. File edits are always accepted and are never paused for approval.
 
 ## What you get
 
-- **Change review** — Pi shows every proposed file edit as a VS Code diff before anything is written to disk. You approve or reject. 
-- **Auto-accept mode** — press `F8` to let Pi apply edits without pausing. Press `F8` again to switch back to review mode.
-- **Editor context** — Pi automatically knows which files you have open, which is active, where your cursor is, and what text you have selected. 
-- **Diagnostics on demand** — Pi can query VS Code's current errors and warnings via the `get_ide_diagnostics` tool, scoped to the active file, a specific file, or all open files.
+- **Manual connection control** — Pi connects only after you run `/ide`. There is no automatic connection or retry loop.
+- **Always-accepted edits** — `edit` and `write` calls proceed immediately without an approval prompt or keyboard toggle.
+- **Editor context** — while connected, Pi knows which files you have open, which is active, where your cursor is, and what text you have selected.
+- **Diagnostics on demand** — while connected, Pi can query VS Code's current errors and warnings via the `get_ide_diagnostics` tool, scoped to the active file, a specific file, or all open files.
 
 ## Installation
 
@@ -27,7 +27,11 @@ In Pi, run:
 /ide install
 ```
 
-This installs the VS Code companion extension automatically. If that fails, see the manual install instructions below.
+Then connect explicitly:
+
+```
+/ide
+```
 
 ### Manual VS Code install
 
@@ -41,15 +45,11 @@ ext install m4riok.pi-ide-bridge-vscode
 
 | Command | What it does |
 |---------|-------------|
-| `/ide` or `/ide status` | Show VS Code connection status |
+| `/ide` | Connect to the matching VS Code window |
+| `/ide status` | Report the current connection state without connecting |
+| `/ide disconnect` | Disconnect from VS Code and clear editor context |
 | `/ide install` | Install the VS Code companion extension |
 | `/ide context` | Show the current editor context Pi is seeing |
 | `/ide diagnostics` | Show diagnostics for the active file |
 | `/ide diagnostics all` | Show diagnostics across all open files |
 | `/ide diagnostics file <path>` | Show diagnostics for a specific file |
-
-## Keyboard shortcuts
-
-| Key | Action |
-|-----|--------|
-| `F8` | Toggle between review mode and auto-accept mode |

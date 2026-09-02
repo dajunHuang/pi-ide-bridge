@@ -1,5 +1,5 @@
 import * as http from 'node:http';
-import { BOOTSTRAP_PORT, BOOTSTRAP_RETRY_BACKOFF_MS, BRIDGE_HOST } from './constants.js';
+import { BOOTSTRAP_PORT, BRIDGE_HOST } from './constants.js';
 import type { BridgeCloseDecision, BridgeConnection, DiagnosticsRequest, DiagnosticsResponse, EditorContext } from './types.js';
 import bridgeContract from './bridgeContract.js';
 
@@ -16,14 +16,13 @@ const {
 
 const HTTP_TIMEOUT_MS = 5_000;
 const LOCAL_PROBE_TIMEOUT_MS = 500;
-const CONNECTION_CACHE_TTL_MS = 20_000;
-const NEGATIVE_CACHE_TTL_MS = 3_000;
+const MANUAL_DISCONNECT_REASON = 'Manual IDE connection is not active. Run /ide to connect';
 
 type ConnectionSource = 'env' | 'bootstrap' | 'none';
 type ResolveResult = { connection: BridgeConnection | undefined; source: ConnectionSource; healthy: boolean; reason?: string };
 
-let cachedResult: ResolveResult | undefined;
-let cachedResultExpiresAt = 0;
+let activeResult: ResolveResult | undefined;
+let disconnectedReason = MANUAL_DISCONNECT_REASON;
 
 export async function sendOpenDiff(payload: {
   filePath: string;
@@ -72,15 +71,19 @@ export function connectContextStream(
   let closed = false;
   let disconnected = false;
   let req: http.ClientRequest | undefined;
+  let streamConnection: BridgeConnection | undefined;
 
   const notifyDisconnect = () => {
     if (closed || disconnected) return;
     disconnected = true;
+    clearActiveConnection(streamConnection, 'IDE context stream disconnected');
     onDisconnect();
   };
 
   const start = async () => {
     const connection = await resolveBridgeConnectionInfo();
+    streamConnection = connection;
+    if (closed) return;
     if (!connection) {
       notifyDisconnect();
       return;
@@ -158,6 +161,31 @@ export function connectContextStream(
   };
 }
 
+export async function connectIdeBridge(): Promise<{ connected: boolean; source: ConnectionSource; port?: number; reason?: string }> {
+  if (activeResult?.connection) {
+    const healthy = await pingBridgeHealth(activeResult.connection);
+    if (healthy) {
+      return { connected: true, source: activeResult.source, port: activeResult.connection.port };
+    }
+    disconnectIdeBridge('Previous IDE bridge connection is no longer reachable');
+  }
+
+  const resolved = await discoverBridgeConnectionInfo();
+  if (!resolved.connection || !resolved.healthy) {
+    disconnectedReason = resolved.reason || 'No matching VS Code bridge is available';
+    return { connected: false, source: resolved.source, reason: disconnectedReason };
+  }
+
+  activeResult = resolved;
+  disconnectedReason = MANUAL_DISCONNECT_REASON;
+  return { connected: true, source: resolved.source, port: resolved.connection.port };
+}
+
+export function disconnectIdeBridge(reason = MANUAL_DISCONNECT_REASON): void {
+  activeResult = undefined;
+  disconnectedReason = reason;
+}
+
 export async function getIdeConnectionStatus(theme?: { fg?: (name: any, text: string) => string }): Promise<{ type: 'info'; text: string }> {
   const diag = await getIdeConnectionDiagnostics();
   if (!diag.connected) {
@@ -189,18 +217,17 @@ export async function isIdeConnected(): Promise<boolean> {
 }
 
 export async function getIdeConnectionDebugInfo(): Promise<{ connected: boolean; source: ConnectionSource; port?: number; reason?: string }> {
-  const resolved = await resolveBridgeConnectionInfoDetailed();
-  if (!resolved.connection) {
-    return { connected: false, source: 'none', reason: resolved.reason || 'No bridge connection info available from env or bootstrap endpoint' };
+  const resolved = activeResult;
+  if (!resolved?.connection) {
+    return { connected: false, source: 'none', reason: disconnectedReason };
   }
 
-  if (!resolved.healthy) {
-    return {
-      connected: false,
-      source: resolved.source,
-      port: resolved.connection.port,
-      reason: 'Bridge health check failed',
-    };
+  const healthy = await pingBridgeHealth(resolved.connection);
+  if (!healthy) {
+    const port = resolved.connection.port;
+    const source = resolved.source;
+    disconnectIdeBridge('Bridge health check failed');
+    return { connected: false, source, port, reason: 'Bridge health check failed' };
   }
 
   return { connected: true, source: resolved.source, port: resolved.connection.port };
@@ -224,46 +251,38 @@ function readConnectionFromEnv(): BridgeConnection | undefined {
 }
 
 async function resolveBridgeConnectionInfo(): Promise<BridgeConnection | undefined> {
-  const resolved = await resolveBridgeConnectionInfoDetailed();
-  return resolved.connection;
+  return activeResult?.connection;
 }
 
-function cacheResult(result: ResolveResult, ttlMs: number) {
-  cachedResult = result;
-  cachedResultExpiresAt = Date.now() + ttlMs;
+function clearActiveConnection(connection: BridgeConnection | undefined, reason: string): void {
+  if (!connection || !activeResult?.connection) return;
+  if (activeResult.connection.port !== connection.port || activeResult.connection.authToken !== connection.authToken) return;
+  disconnectIdeBridge(reason);
 }
 
-async function resolveBridgeConnectionInfoDetailed(): Promise<ResolveResult> {
-  if (cachedResult && cachedResultExpiresAt > Date.now()) return cachedResult;
-
+async function discoverBridgeConnectionInfo(): Promise<ResolveResult> {
   const envConnection = readConnectionFromEnv();
   if (envConnection) {
     const envHealthy = await pingBridgeHealth(envConnection);
     if (envHealthy) {
-      const result: ResolveResult = { connection: envConnection, source: 'env', healthy: true };
-      cacheResult(result, CONNECTION_CACHE_TTL_MS);
-      return result;
+      return { connection: envConnection, source: 'env', healthy: true };
     }
   }
 
-  const bootstrap = await fetchBridgeConnectionWithRetry();
+  const bootstrap = await fetchBridgeConnection();
   if (bootstrap.connection) {
     const healthy = await pingBridgeHealth(bootstrap.connection);
     if (healthy) {
-      const result: ResolveResult = { connection: bootstrap.connection, source: 'bootstrap', healthy: true };
-      cacheResult(result, CONNECTION_CACHE_TTL_MS);
-      return result;
+      return { connection: bootstrap.connection, source: 'bootstrap', healthy: true };
     }
   }
 
-  const result: ResolveResult = {
+  return {
     connection: undefined,
     source: 'none',
     healthy: false,
     reason: bootstrap.reason || 'No bridge connection info available from env or bootstrap endpoint',
   };
-  cacheResult(result, NEGATIVE_CACHE_TTL_MS);
-  return result;
 }
 
 type ResolveOutcome =
@@ -271,16 +290,10 @@ type ResolveOutcome =
   | { status: 'not_found'; reason: string }
   | { status: 'error'; reason: string };
 
-async function fetchBridgeConnectionWithRetry(): Promise<{ connection?: BridgeConnection; reason?: string }> {
-  let lastReason = 'Bootstrap resolve failed';
-  for (const delay of BOOTSTRAP_RETRY_BACKOFF_MS) {
-    const outcome = await resolveViaBootstrap();
-    if (outcome.status === 'ready') return { connection: outcome.connection };
-    lastReason = outcome.reason;
-    if (outcome.status !== 'not_found') break; // don't retry hard errors or ambiguity
-    await new Promise<void>((r) => setTimeout(r, delay));
-  }
-  return { reason: lastReason };
+async function fetchBridgeConnection(): Promise<{ connection?: BridgeConnection; reason?: string }> {
+  const outcome = await resolveViaBootstrap();
+  if (outcome.status === 'ready') return { connection: outcome.connection };
+  return { reason: outcome.reason };
 }
 
 async function resolveViaBootstrap(): Promise<ResolveOutcome> {
