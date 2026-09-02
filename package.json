@@ -1,0 +1,24 @@
+{
+  "name": "pi-ide-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Manually controlled VS Code editor context and diagnostics bridge for Pi.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dajhuang/pi-ide-bridge"
+  },
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./pi-extension/index.ts"
+    ]
+  },
+  "dependencies": {
+    "string-width": "^8.2.1",
+    "typebox": "^1.1.38"
+  }
+}
