@@ -18,7 +18,9 @@
     ]
   },
   "dependencies": {
-    "string-width": "^8.2.1",
-    "typebox": "^1.1.38"
+    "string-width": "^8.2.1"
+  },
+  "peerDependencies": {
+    "typebox": "*"
   }
 }
